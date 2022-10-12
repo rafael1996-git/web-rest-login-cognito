@@ -1,0 +1,152 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM Template For Deploy Java Lambda for talentport-ws-login
+Parameters:
+  Environment:
+    Type: String
+  Name:
+    Type: String
+  Version:
+    Type: String
+Mappings:
+  Configuration:
+    dev:
+      ReservedConcurrentExecutions: 1
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 512
+      Timeout: 120
+      LambdaSecurityGroupIds:
+        - sg-0376767cea75e42d8
+      LambdaSubnetIds:
+        - subnet-0f91adc19d1fc882b
+        - subnet-093bbcc9af4bedffe
+        - subnet-0db29cf0fa78e6ecb 
+    qa:
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 1024
+      Timeout: 90
+      LambdaSecurityGroupIds:
+        - sg-0376767cea75e42d8
+      LambdaSubnetIds:
+        - subnet-0f91adc19d1fc882b
+        - subnet-093bbcc9af4bedffe
+        - subnet-0db29cf0fa78e6ecb 
+    prod:
+      CodeDeployRole: DevOpsCodeDeploy
+      CodeDeployType: CodeDeployDefault.LambdaAllAtOnce
+      MemorySize: 1024
+      Timeout: 90
+      LambdaSecurityGroupIds:
+        - sg-0376767cea75e42d8
+      LambdaSubnetIds:
+        - subnet-0f91adc19d1fc882b
+        - subnet-093bbcc9af4bedffe
+        - subnet-0db29cf0fa78e6ecb
+  Layers: 
+    dev: 
+      TalentPortCoreDbOracle: "talentport-core-oracle:1"
+    qa: 
+      TalentPortCoreDbOracle: "talentport-core-oracle:1"
+    prod:
+      TalentPortCoreDbOracle: "talentport-core-oracle:1" 
+  Variables:
+    dev:
+      CognitKey: com/talentport/security/cognito/cognitoUsers
+      OraDBKey: com/talentport/db/oracle/USRTALENTPORT
+    qa:
+      CognitKey: com/talentport/security/cognito/cognitosUsers
+      OraDBKey: com/talentport/db/oracle/USRTALENTPORT
+    prod:
+      CognitKey: com/talentport/security/cognito/cognitoUsers
+      OraDBKey: com/talentport/db/oracle/USRTALENTPORT
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Description: !Sub
+        - "Role for lambda ${Name}"
+        - { Name: !Ref Name }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      Path: /devops/
+      Policies:
+        - PolicyName: !Ref Name
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: !Sub
+                  - 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Name}'
+                  - { Name: !Ref Name }
+      RoleName: !Ref Name
+      Tags:
+        - Key: "Type"
+          Value: "devops"
+  LambdaAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: LambdaFunction
+    Properties:
+      AlarmName: !Ref Name
+      AlarmDescription: Alarma de pruebas
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Maximum
+      Period: '60'
+      EvaluationPeriods: '1'
+      Threshold: '1'
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:DevOps"
+      Dimensions:
+        - Name: Name
+          Value:
+            Ref: LambdaFunction
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Ref Name
+      CodeUri: dist
+      Handler: com.talentport.login.TalentPortLambdaHandler::handleRequest
+      Runtime: java11
+      MemorySize: !FindInMap [ Configuration, !Ref Environment, MemorySize ]
+      Timeout: !FindInMap [ Configuration, !Ref Environment, Timeout ]
+      Description: !Sub
+        - "Release Version ${Version}"
+        - { Version: !Ref Version }
+      ReservedConcurrentExecutions: !FindInMap [ Configuration, !Ref Environment, ReservedConcurrentExecutions ]
+      Layers:
+        - !Sub
+          - "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:${Layer}"
+          - { Layer: !FindInMap [ Layers, !Ref Environment, TalentPortCoreDbOracle ] }
+      Environment:
+        Variables:
+          APP_NAME: !Ref Name
+          APP_ENVIRONMENT: !Ref Environment
+          APP_VERSION: !Ref Version
+          OraDBKey: !FindInMap [ Variables, !Ref Environment, OraDBKey ]
+          CognitKey: !FindInMap [ Variables, !Ref Environment, CognitKey ]
+      AutoPublishAlias: live
+      Role: !Sub
+        - "arn:aws:iam::${AWS::AccountId}:role/devops/${LambdaRole}"
+        - { LambdaRole: !Ref LambdaRole }
+      DeploymentPreference:
+        Role: !Sub
+          - "arn:aws:iam::${AWS::AccountId}:role/service-role/${CodeDeployRole}"
+          - { CodeDeployRole: !FindInMap [ Configuration, !Ref Environment, CodeDeployRole ] }
+        Type: !FindInMap [ Configuration, !Ref Environment, CodeDeployType ]
+      VpcConfig:
+        SecurityGroupIds: !FindInMap [ Configuration, !Ref Environment, LambdaSecurityGroupIds ]
+        SubnetIds: !FindInMap [ Configuration, !Ref Environment, LambdaSubnetIds ]
